@@ -3,8 +3,8 @@
 Firewall() {
 clear
 printf "\n\n\n"
-
-
+WAN="wlp0s20f3"
+LAN="enp0s31f6"
 read -p "DESEA CONFIGURAR EL FIREWALL [S/N] [   🤔   ] " SiNo
 SiNo=${SiNo,,}
 
