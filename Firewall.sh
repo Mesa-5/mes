@@ -72,6 +72,11 @@ iptables -A INPUT -i "$LAN" -p udp --dport 67 -j ACCEPT
 iptables -C FORWARD -i "$WAN" -o "$LAN" -d "$RED" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "$WAN" -o "$LAN" -d "$RED" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 sysctl net.ipv4.ip_forward
 
+sudo iptables -P FORWARD ACCEPT                                                                                                                       
+sudo iptables -A FORWARD -i enp0s31f6 -o wlp0s20f3 -j ACCEPT                                                                       
+sudo iptables -A FORWARD -i wlp0s20f3 -o enp0s31f6 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT                                                                                                                              sudo iptables -t nat -A POSTROUTING -s 192.168.50.0/24 -o wlp0s20f3 -j MASQUERADE                       
+sudo sysctl -w net.ipv4.ip_forward=1
+
 
 echo -e "FIREWALL IMPLEMENTADO CORRECTAMENTE  [   🔰   ]" 
 sleep 2
