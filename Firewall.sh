@@ -4,6 +4,7 @@ Firewall() {
 clear
 printf "\n\n\n"
 
+
 read -p "DESEA CONFIGURAR EL FIREWALL [S/N] [   🤔   ] " SiNo
 SiNo=${SiNo,,}
 
@@ -55,6 +56,15 @@ sleep 1
 iptables -A INPUT -p tcp --dport 443 -j ACCEPT >/dev/null 2>&1;
 sleep 1
 iptables -A INPUT -p tcp --dport 5666 -j ACCEPT >/dev/null 2>&1;
+sleep 1
+iptables -t nat -C POSTROUTING -s "$RED" -o "$WAN" -j MASQUERADE 2>/dev/null || \
+iptables -t nat -A POSTROUTING -s "$RED" -o "$WAN" -j MASQUERADE
+
+iptables -C FORWARD -i "$LAN" -o "$WAN" -j ACCEPT 2>/dev/null || \
+iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
+
+iptables -C FORWARD -i "$WAN" -o "$LAN" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+iptables -A FORWARD -i "$WAN" -o "$LAN" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 sleep 1
 echo -e "FIREWALL IMPLEMENTADO CORRECTAMENTE  [   🔰   ]" 
 sleep 2
