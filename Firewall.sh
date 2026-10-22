@@ -67,6 +67,12 @@ iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
 iptables -C FORWARD -i "$WAN" -o "$LAN" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
 iptables -A FORWARD -i "$WAN" -o "$LAN" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 sleep 1
+
+iptables -A INPUT -i "$LAN" -p udp --dport 67 -j ACCEPT
+iptables -C FORWARD -i "$WAN" -o "$LAN" -d "$RED" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "$WAN" -o "$LAN" -d "$RED" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+sysctl net.ipv4.ip_forward
+
+
 echo -e "FIREWALL IMPLEMENTADO CORRECTAMENTE  [   🔰   ]" 
 sleep 2
 clear
