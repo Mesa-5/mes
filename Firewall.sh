@@ -5,7 +5,7 @@ clear
 printf "\n\n\n"
 WAN="wlp0s20f3"
 LAN="enp0s31f6"
-RED="192.168.50.0/24"
+RED="192.168.15.0/24"
 read -p "DESEA CONFIGURAR EL FIREWALL [S/N] [   🤔   ] " SiNo
 SiNo=${SiNo,,}
 
@@ -74,7 +74,8 @@ sysctl net.ipv4.ip_forward
 
 sudo iptables -P FORWARD ACCEPT                                                                                                                       
 sudo iptables -A FORWARD -i enp0s31f6 -o wlp0s20f3 -j ACCEPT                                                                       
-sudo iptables -A FORWARD -i wlp0s20f3 -o enp0s31f6 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT                                                                                                                              sudo iptables -t nat -A POSTROUTING -s 192.168.50.0/24 -o wlp0s20f3 -j MASQUERADE                       
+sudo iptables -A FORWARD -i wlp0s20f3 -o enp0s31f6 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT                                                                                                                
+sudo iptables -t nat -A POSTROUTING -s 192.168.15.0/24 -o wlp0s20f3 -j MASQUERADE                       
 sudo sysctl -w net.ipv4.ip_forward=1
 
 
