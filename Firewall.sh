@@ -1,30 +1,32 @@
 #!/bin/bash
 # 02-firewall.sh
-# Ejecutar como root: sudo bash 02-firewall.sh
 
 if [ "$EUID" -ne 0 ]; then
     echo "Ejecuta este script como root"
     exit 1
 fi
 
-WAN=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^wl|^wlan' | head -n1)
-LAN=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^en|^eth' | head -n1)
+mapfile -t WIFI_IFACES < <(ip -o link show | awk -F': ' '{print $2}' | grep -E '^wl|^wlan')
+mapfile -t ETH_IFACES  < <(ip -o link show | awk -F': ' '{print $2}' | grep -E '^en|^eth')
 
 RED="192.168.50.0/24"
 DNS="8.8.8.8"
 
 echo "Interfaces detectadas:"
-echo "  WAN (WiFi): ${WAN:-No encontrada}"
-echo "  LAN (Ethernet): ${LAN:-No encontrada}"
+echo "  WiFi : ${WIFI_IFACES[*]:-Ninguna}"
+echo "  Ethernet: ${ETH_IFACES[*]:-Ninguna}"
 echo ""
 
-if [ -z "$WAN" ] && [ -z "$LAN" ]; then
+if [ ${#WIFI_IFACES[@]} -eq 0 ] && [ ${#ETH_IFACES[@]} -eq 0 ]; then
     echo "No se encontró ninguna interfaz válida."
     exit 1
 fi
 
+WAN="${WIFI_IFACES[0]}"
+LAN="${ETH_IFACES[0]}"
+
 Firewall() {
-    echo "Limpiando reglas existentes..."
+   
     iptables -P INPUT ACCEPT
     iptables -P OUTPUT ACCEPT
     iptables -P FORWARD ACCEPT
@@ -37,43 +39,47 @@ Firewall() {
     iptables -t raw -F
     iptables -t raw -X
 
-    echo "Configurando políticas..."
     iptables -P INPUT DROP
     iptables -P OUTPUT ACCEPT
     iptables -P FORWARD DROP
 
-    echo "Reglas básicas..."
     iptables -A INPUT -i lo -j ACCEPT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A INPUT -p icmp -j ACCEPT
 
-    echo "Puertos de administración y servicios..."
     iptables -A INPUT -p tcp --dport 22 -j ACCEPT
     iptables -A INPUT -p tcp --dport 80 -j ACCEPT
     iptables -A INPUT -p tcp --dport 443 -j ACCEPT
     iptables -A INPUT -p tcp --dport 5666 -j ACCEPT
-
-    echo "Puertos Asterisk..."
+    
     iptables -A INPUT -p udp --dport 5060 -j ACCEPT
     iptables -A INPUT -p tcp --dport 5060 -j ACCEPT
     iptables -A INPUT -p tcp --dport 5061 -j ACCEPT
     iptables -A INPUT -p udp --dport 10000:20000 -j ACCEPT
 
-    if [ -n "$LAN" ]; then
+    if [ ${#ETH_IFACES[@]} -gt 0 ]; then
         echo "Puertos DHCP..."
-        iptables -A INPUT -i "$LAN" -p udp --dport 67 -j ACCEPT
-        iptables -A INPUT -i "$LAN" -p udp --dport 68 -j ACCEPT
+        for IFACE in "${ETH_IFACES[@]}"; do
+            iptables -A INPUT -i "$IFACE" -p udp --dport 67 -j ACCEPT
+            iptables -A INPUT -i "$IFACE" -p udp --dport 68 -j ACCEPT
+        done
     fi
-
-    if [ -n "$WAN" ] && [ -n "$LAN" ]; then
-        echo "NAT y reenvío (pasarela completa)..."
-        iptables -t nat -A POSTROUTING -s "$RED" -o "$WAN" -j MASQUERADE
-        iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
-        iptables -A FORWARD -i "$WAN" -o "$LAN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    
+    if [ ${#WIFI_IFACES[@]} -gt 0 ] && [ ${#ETH_IFACES[@]} -gt 0 ]; then
+        echo "NAT y reenvío (pasarela)..."
+        for W in "${WIFI_IFACES[@]}"; do
+            for E in "${ETH_IFACES[@]}"; do
+                iptables -t nat -A POSTROUTING -s "$RED" -o "$W" -j MASQUERADE
+                iptables -A FORWARD -i "$E" -o "$W" -j ACCEPT
+                iptables -A FORWARD -i "$W" -o "$E" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+            done
+        done
 
         echo "Redirección DNS..."
-        iptables -t nat -A PREROUTING -i "$LAN" -p udp --dport 53 -j DNAT --to-destination ${DNS}:53
-        iptables -t nat -A PREROUTING -i "$LAN" -p tcp --dport 53 -j DNAT --to-destination ${DNS}:53
+        for E in "${ETH_IFACES[@]}"; do
+            iptables -t nat -A PREROUTING -i "$E" -p udp --dport 53 -j DNAT --to-destination ${DNS}:53
+            iptables -t nat -A PREROUTING -i "$E" -p tcp --dport 53 -j DNAT --to-destination ${DNS}:53
+        done
         iptables -t nat -A POSTROUTING -p udp -d "$DNS" --dport 53 -j MASQUERADE
         iptables -t nat -A POSTROUTING -p tcp -d "$DNS" --dport 53 -j MASQUERADE
 
@@ -81,10 +87,9 @@ Firewall() {
         echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-pasarela.conf
         sysctl -p /etc/sysctl.d/99-pasarela.conf
     else
-        echo "Solo una interfaz disponible. Se aplicaron reglas básicas."
+        echo "Falta WiFi o Ethernet. Se aplicaron solo reglas básicas."
     fi
 
-    echo "Haciendo reglas persistentes..."
     if ! dpkg -l | grep -q iptables-persistent; then
         DEBIAN_FRONTEND=noninteractive apt install -y iptables-persistent
     fi
@@ -92,7 +97,7 @@ Firewall() {
     netfilter-persistent save
     netfilter-persistent reload
 
-    echo "Firewall configurado correctamente."
+    echo "Firewall implementado correctamente."
     sleep 2
 }
 
@@ -110,6 +115,7 @@ Estado() {
 
 while true; do
     clear
+    printf "\n\n"
     echo "1) Implementar firewall"
     echo "2) Ver estado del firewall"
     echo "3) Salir"
