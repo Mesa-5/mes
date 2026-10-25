@@ -7,11 +7,21 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-WAN="wlp0s20f3"
-LAN="enp0s31f6"
+WAN=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^wl' | head -n1)
+LAN=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^en|^eth' | head -n1)
+
 RED="192.168.50.0/24"
-LAN_IP="192.168.50.1"
 DNS="8.8.8.8"
+
+echo "Interfaces detectadas:"
+echo "  WAN (WiFi): ${WAN:-No encontrada}"
+echo "  LAN (Ethernet): ${LAN:-No encontrada}"
+echo ""
+
+if [ -z "$WAN" ] && [ -z "$LAN" ]; then
+    echo "No se encontró ninguna interfaz válida."
+    exit 1
+fi
 
 Firewall() {
     echo "Limpiando reglas existentes..."
@@ -43,30 +53,38 @@ Firewall() {
     iptables -A INPUT -p tcp --dport 443 -j ACCEPT
     iptables -A INPUT -p tcp --dport 5666 -j ACCEPT
 
-    echo "Puertos DHCP..."
-    iptables -A INPUT -i "$LAN" -p udp --dport 67 -j ACCEPT
-    iptables -A INPUT -i "$LAN" -p udp --dport 68 -j ACCEPT
-
     echo "Puertos Asterisk..."
     iptables -A INPUT -p udp --dport 5060 -j ACCEPT
     iptables -A INPUT -p tcp --dport 5060 -j ACCEPT
     iptables -A INPUT -p tcp --dport 5061 -j ACCEPT
     iptables -A INPUT -p udp --dport 10000:20000 -j ACCEPT
 
-    echo "NAT y reenvío (pasarela)..."
-    iptables -t nat -A POSTROUTING -s "$RED" -o "$WAN" -j MASQUERADE
-    iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
-    iptables -A FORWARD -i "$WAN" -o "$LAN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    # Solo si existe LAN
+    if [ -n "$LAN" ]; then
+        echo "Puertos DHCP..."
+        iptables -A INPUT -i "$LAN" -p udp --dport 67 -j ACCEPT
+        iptables -A INPUT -i "$LAN" -p udp --dport 68 -j ACCEPT
+    fi
 
-    echo "Redirección DNS + enmascaramiento..."
-    iptables -t nat -A PREROUTING -i "$LAN" -p udp --dport 53 -j DNAT --to-destination ${DNS}:53
-    iptables -t nat -A PREROUTING -i "$LAN" -p tcp --dport 53 -j DNAT --to-destination ${DNS}:53
-    iptables -t nat -A POSTROUTING -p udp -d "$DNS" --dport 53 -j MASQUERADE
-    iptables -t nat -A POSTROUTING -p tcp -d "$DNS" --dport 53 -j MASQUERADE
+    # NAT solo si existen AMBAS interfaces
+    if [ -n "$WAN" ] && [ -n "$LAN" ]; then
+        echo "NAT y reenvío (pasarela completa)..."
+        iptables -t nat -A POSTROUTING -s "$RED" -o "$WAN" -j MASQUERADE
+        iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
+        iptables -A FORWARD -i "$WAN" -o "$LAN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-    echo "Activando IP forwarding..."
-    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-pasarela.conf
-    sysctl -p /etc/sysctl.d/99-pasarela.conf
+        echo "Redirección DNS..."
+        iptables -t nat -A PREROUTING -i "$LAN" -p udp --dport 53 -j DNAT --to-destination ${DNS}:53
+        iptables -t nat -A PREROUTING -i "$LAN" -p tcp --dport 53 -j DNAT --to-destination ${DNS}:53
+        iptables -t nat -A POSTROUTING -p udp -d "$DNS" --dport 53 -j MASQUERADE
+        iptables -t nat -A POSTROUTING -p tcp -d "$DNS" --dport 53 -j MASQUERADE
+
+        echo "Activando IP forwarding..."
+        echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-pasarela.conf
+        sysctl -p /etc/sysctl.d/99-pasarela.conf
+    else
+        echo "Solo una interfaz disponible. Se aplicaron reglas básicas."
+    fi
 
     echo "Haciendo reglas persistentes..."
     if ! dpkg -l | grep -q iptables-persistent; then
@@ -94,7 +112,6 @@ Estado() {
 
 while true; do
     clear
-    printf "\n\n"
     echo "1) Implementar firewall"
     echo "2) Ver estado del firewall"
     echo "3) Salir"
