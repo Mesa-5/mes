@@ -93,6 +93,7 @@ Estado() {
 }
 
 while true; do
+    printf "\n\n"
     clear
     echo "1) Implementar firewall"
     echo "2) Ver estado del firewall"
