@@ -7,7 +7,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-WAN=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^wl' | head -n1)
+WAN=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^wl|^wlan' | head -n1)
 LAN=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^en|^eth' | head -n1)
 
 RED="192.168.50.0/24"
@@ -59,14 +59,12 @@ Firewall() {
     iptables -A INPUT -p tcp --dport 5061 -j ACCEPT
     iptables -A INPUT -p udp --dport 10000:20000 -j ACCEPT
 
-    # Solo si existe LAN
     if [ -n "$LAN" ]; then
         echo "Puertos DHCP..."
         iptables -A INPUT -i "$LAN" -p udp --dport 67 -j ACCEPT
         iptables -A INPUT -i "$LAN" -p udp --dport 68 -j ACCEPT
     fi
 
-    # NAT solo si existen AMBAS interfaces
     if [ -n "$WAN" ] && [ -n "$LAN" ]; then
         echo "NAT y reenvío (pasarela completa)..."
         iptables -t nat -A POSTROUTING -s "$RED" -o "$WAN" -j MASQUERADE
