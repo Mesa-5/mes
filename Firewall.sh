@@ -236,7 +236,7 @@ ActivarAntena() {
 
     Pausa
 }
-}
+
 
 # =========================================================
 # FUNCION 2: CONFIGURAR PASARELA DOBLE WIFI
