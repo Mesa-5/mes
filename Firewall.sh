@@ -46,7 +46,6 @@ Pausa() {
 
 ActivarAntena() {
 
-ActivarAntena() {
     clear
 
     echo "=========================================="
