@@ -40,106 +40,171 @@ Pausa() {
 # FUNCION 1: ACTIVAR ANTENA USB
 # =========================================================
 
+# =========================================================
+# FUNCION 1: INSTALAR Y ACTIVAR ANTENA USB RTL8852BU
+# =========================================================
+
 ActivarAntena() {
     clear
-    echo "======================================"
-    echo "       ACTIVAR ANTENA USB WIFI"
-    echo "======================================"
+    echo "=========================================="
+    echo " INSTALAR Y ACTIVAR ANTENA WIFI USB"
+    echo "=========================================="
+
+    if ip link show wlxc83a35b1136d >/dev/null 2>&1; then
+    ip link set wlxc83a35b1136d up
+    echo "Antena USB activada correctamente."
+    ip -br link show wlxc83a35b1136d
+    Pausa
+    return
+fi
+
+    INTERFAZ_USB="wlxc83a35b1136d"
+    MODULO="8852bu"
+    ZIP="/tmp/rtl8852bu.zip"
+    DIRECTORIO="/tmp/rtl8852bu-driver"
 
     echo ""
-    echo "Interfaces WiFi detectadas:"
-    DetectarInterfaces
-
-    printf '%s\n' "${WIFI_IFACES[@]:-Ninguna}"
-
+    echo "Interfaz de la antena: $INTERFAZ_USB"
     echo ""
-    echo "Preparando el controlador RTL8852BU..."
 
-    if modprobe 8852bu 2>/dev/null; then
-        echo "El controlador 8852bu ya está disponible."
+    # Comprobar si la interfaz ya existe.
+    if ip link show "$INTERFAZ_USB" >/dev/null 2>&1; then
+        echo "La interfaz USB ya está detectada."
     else
-        echo "Instalando dependencias..."
+        echo "La interfaz todavía no aparece."
+    fi
 
-        if ! apt update ||
-           ! apt install -y build-essential dkms \
-             "linux-headers-$(uname -r)" bc unzip curl; then
-            echo "Error instalando las dependencias."
-            Pausa
-            return
-        fi
+    # Instalar dependencias.
+    echo ""
+    echo "[1/6] Actualizando paquetes..."
 
-        URL="https://github.com/Mesa-5/PROYECTO_FINAL_MESA-5/archive/refs/heads/main.zip"
-        ZIP="/tmp/mesa5-controlador.zip"
+    if ! apt update; then
+        echo "Error actualizando los paquetes."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
 
-        echo "Descargando el ZIP desde GitHub..."
+    echo ""
+    echo "[2/6] Instalando GCC 12 y dependencias..."
 
-        if ! curl -fL "$URL" -o "$ZIP"; then
-            echo "No se pudo descargar el ZIP."
-            Pausa
-            return
-        fi
+    if ! apt install -y gcc-12 g++-12 build-essential dkms \
+        bc curl unzip "linux-headers-$(uname -r)"; then
+        echo "Error instalando las dependencias."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
 
-        mkdir -p /tmp/mesa5-controlador
-        rm -rf /tmp/mesa5-controlador/*
-        
-        if ! unzip -oq "$ZIP" -d /tmp/mesa5-controlador; then
-            echo "No se pudo extraer el ZIP."
-            Pausa
-            return
-        fi
+    # Comprobar compilador.
+    if ! command -v gcc-12 >/dev/null 2>&1; then
+        echo "No se encuentra gcc-12."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
 
-        INSTALLER="$(find /tmp/mesa5-controlador \
-            -type f -name install-driver.sh -print -quit)"
+    echo ""
+    gcc-12 --version | head -n 1
 
-        if [ -z "$INSTALLER" ]; then
-            echo "No se encontró install-driver.sh dentro del ZIP."
-            echo "Comprueba la estructura del repositorio."
-            Pausa
-            return
-        fi
+    # Descargar ZIP del repositorio del usuario.
+    echo ""
+    echo "[3/6] Descargando controlador desde GitHub..."
 
-        DRIVER_DIR="$(dirname "$INSTALLER")"
+    URL="https://raw.githubusercontent.com/Mesa-5/mes/refs/heads/main/rtl8852bu-20240418-main.zip"
 
-        echo "Instalador encontrado en:"
-        echo "$DRIVER_DIR"
+    if ! curl -fL "$URL" -o "$ZIP"; then
+        echo "No se pudo descargar el ZIP."
+        echo "Comprueba que el archivo exista en tu repositorio."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
 
-        cd "$DRIVER_DIR" || {
-            echo "No se pudo entrar en la carpeta del controlador."
-            Pausa
-            return
-        }
+    # Extraer controlador.
+    echo ""
+    echo "[4/6] Extrayendo controlador..."
 
-        echo "Ejecutando instalador..."
+    rm -rf "$DIRECTORIO"
+    mkdir -p "$DIRECTORIO"
 
-        if ! bash ./install-driver.sh; then
-            echo "Falló la instalación del controlador."
-            Pausa
-            return
-        fi
+    if ! unzip -oq "$ZIP" -d "$DIRECTORIO"; then
+        echo "Error extrayendo el ZIP."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
 
-        if ! modprobe 8852bu; then
-            echo "No se pudo cargar el módulo 8852bu."
-            echo "Comprueba los mensajes con: dmesg | tail -50"
-            Pausa
-            return
-        fi
+    # Encontrar el Makefile del controlador.
+    CARPETA_MAKE="$(find "$DIRECTORIO" -type f -name Makefile \
+        -print -quit | xargs -r dirname)"
+
+    if [ -z "$CARPETA_MAKE" ] || [ ! -f "$CARPETA_MAKE/Makefile" ]; then
+        echo "No se encontró el Makefile del controlador."
+        echo "Comprueba el contenido del ZIP."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
+
+    cd "$CARPETA_MAKE" || return 1
+
+    echo "Carpeta del controlador: $CARPETA_MAKE"
+
+    # Compilar.
+    echo ""
+    echo "[5/6] Compilando controlador con make..."
+
+    make clean || true
+
+    if ! make; then
+        echo ""
+        echo "ERROR: la compilación falló."
+        echo "No se ejecutará make install."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
+
+    # Instalar módulo.
+    echo ""
+    echo "[6/6] Instalando controlador..."
+
+    if ! make install; then
+        echo "Error instalando el controlador."
+        read -r -p "Presiona Enter para continuar..."
+        return 1
+    fi
+
+    # Actualizar dependencias de módulos y cargar controlador.
+    depmod -a
+
+    if ! modprobe "$MODULO"; then
+        echo "No se pudo cargar el módulo $MODULO."
+        echo "Comprueba Secure Boot y los mensajes del kernel."
+        dmesg | tail -30
+        read -r -p "Presiona Enter para continuar..."
+        return 1
     fi
 
     sleep 3
+    
+    if ip link show "$INTERFAZ_USB" >/dev/null 2>&1; then
+        if ! ip link set "$INTERFAZ_USB" up; then
+            echo "No se pudo activar la interfaz."
+            read -r -p "Presiona Enter para continuar..."
+            return 1
+        fi
 
-    DetectarInterfaces
+        echo ""
+        echo "ANTENA USB ACTIVADA CORRECTAMENTE."
+        ip -br link show "$INTERFAZ_USB"
+    else
+        echo ""
+        echo "El módulo se cargó, pero la interfaz no apareció."
+        echo "Comprueba si el controlador corresponde a tu antena."
+        echo ""
+        ip -br link
+    fi
 
     echo ""
-    echo "Interfaces WiFi disponibles:"
-    printf '%s\n' "${WIFI_IFACES[@]:-Ninguna}"
+    echo "Estado del módulo:"
+    lsmod | grep "$MODULO" || true
 
-    echo ""
-    echo "Controlador de antena USB:"
-    lsmod | grep 8852bu || true
-
-    echo ""
-    echo "Si aparece una interfaz nueva, la antena está reconocida."
-    Pausa
+    read -r -p "Presiona Enter para continuar..."
 }
 
 # =========================================================
