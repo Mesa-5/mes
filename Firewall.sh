@@ -45,166 +45,196 @@ Pausa() {
 # =========================================================
 
 ActivarAntena() {
-    clear
-    echo "=========================================="
-    echo " INSTALAR Y ACTIVAR ANTENA WIFI USB"
-    echo "=========================================="
 
-    if ip link show wlxc83a35b1136d >/dev/null 2>&1; then
-    ip link set wlxc83a35b1136d up
-    echo "Antena USB activada correctamente."
-    ip -br link show wlxc83a35b1136d
-    Pausa
-    return
-fi
+    clear
+
+    echo "=========================================="
+    echo " INSTALADOR RTL8852BU PARA UBUNTU SERVER"
+    echo "=========================================="
 
     INTERFAZ_USB="wlxc83a35b1136d"
     MODULO="8852bu"
-    ZIP="/tmp/rtl8852bu.zip"
-    DIRECTORIO="/tmp/rtl8852bu-driver"
+    DIRECTORIO="/usr/local/src/rtl8852bu"
 
-    echo ""
-    echo "Interfaz de la antena: $INTERFAZ_USB"
-    echo ""
-
-    # Comprobar si la interfaz ya existe.
-    if ip link show "$INTERFAZ_USB" >/dev/null 2>&1; then
-        echo "La interfaz USB ya está detectada."
-    else
-        echo "La interfaz todavía no aparece."
-    fi
-
-    # Instalar dependencias.
-    echo ""
-    echo "[1/6] Actualizando paquetes..."
-
-    if ! apt update; then
-        echo "Error actualizando los paquetes."
-        read -r -p "Presiona Enter para continuar..."
+    # Comprobar Ubuntu
+    if [ ! -f /etc/os-release ]; then
+        echo "No se pudo identificar Ubuntu."
+        Pausa
         return 1
     fi
 
-    echo ""
-    echo "[2/6] Instalando GCC 12 y dependencias..."
+    . /etc/os-release
 
-    if ! apt install -y gcc-12 g++-12 build-essential dkms \
-        bc curl unzip "linux-headers-$(uname -r)"; then
-        echo "Error instalando las dependencias."
-        read -r -p "Presiona Enter para continuar..."
+    if [ "$ID" != "ubuntu" ] ||
+       { [ "$VERSION_ID" != "22.04" ] &&
+         [ "$VERSION_ID" != "24.04" ]; }; then
+        echo "Este instalador admite Ubuntu 22.04 y 24.04."
+        Pausa
         return 1
     fi
 
-    # Comprobar compilador.
-    if ! command -v gcc-12 >/dev/null 2>&1; then
-        echo "No se encuentra gcc-12."
-        read -r -p "Presiona Enter para continuar..."
-        return 1
-    fi
-
+    echo "Ubuntu: $VERSION_ID"
+    echo "Kernel: $(uname -r)"
+    echo "Interfaz esperada: $INTERFAZ_USB"
     echo ""
-    gcc-12 --version | head -n 1
 
-    # Descargar ZIP del repositorio del usuario.
-    echo ""
-    echo "[3/6] Descargando controlador desde GitHub..."
+    # Instalar herramientas y encabezados del kernel
+    echo "[1/5] Instalando dependencias..."
 
-    URL="https://github.com/Mesa-5/PROYECTO_FINAL_MESA-5/raw/refs/heads/main/rtl8852bu-20240418-main.zip"
+    if ! apt update ||
+       ! apt install -y \
+           build-essential \
+           dkms \
+           git \
+           bc \
+           iw \
+           rfkill \
+           libelf-dev \
+           "linux-headers-$(uname -r)" \
+           linux-headers-generic; then
 
-    if ! curl -fL "$URL" -o "$ZIP"; then
-        echo "No se pudo descargar el ZIP."
-        echo "Comprueba que el archivo exista en tu repositorio."
-        read -r -p "Presiona Enter para continuar..."
-        return 1
-    fi
-
-    # Extraer controlador.
-    echo ""
-    echo "[4/6] Extrayendo controlador..."
-
-    rm -rf "$DIRECTORIO"
-    mkdir -p "$DIRECTORIO"
-
-    if ! unzip -oq "$ZIP" -d "$DIRECTORIO"; then
-        echo "Error extrayendo el ZIP."
-        read -r -p "Presiona Enter para continuar..."
-        return 1
-    fi
-
-    # Encontrar el Makefile del controlador.
-    CARPETA_MAKE="$(find "$DIRECTORIO" -type f -name Makefile \
-        -print -quit | xargs -r dirname)"
-
-    if [ -z "$CARPETA_MAKE" ] || [ ! -f "$CARPETA_MAKE/Makefile" ]; then
-        echo "No se encontró el Makefile del controlador."
-        echo "Comprueba el contenido del ZIP."
-        read -r -p "Presiona Enter para continuar..."
-        return 1
-    fi
-
-    cd "$CARPETA_MAKE" || return 1
-
-    echo "Carpeta del controlador: $CARPETA_MAKE"
-
-    # Compilar.
-    echo ""
-    echo "[5/6] Compilando controlador con make..."
-
-    make clean || true
-
-    if ! make; then
         echo ""
-        echo "ERROR: la compilación falló."
-        echo "No se ejecutará make install."
-        read -r -p "Presiona Enter para continuar..."
+        echo "ERROR: no se pudieron instalar las dependencias."
+        echo "Comprueba la conexión y los encabezados del kernel."
+        Pausa
         return 1
     fi
 
-    # Instalar módulo.
+    # Verificar encabezados
+    if [ ! -e "/lib/modules/$(uname -r)/build" ]; then
+        echo ""
+        echo "No existen encabezados para el kernel actual."
+        echo "Reinicia Ubuntu y vuelve a ejecutar esta opción."
+        Pausa
+        return 1
+    fi
+
+    # Obtener el controlador actualizado
     echo ""
-    echo "[6/6] Instalando controlador..."
+    echo "[2/5] Descargando controlador actualizado..."
 
-    if ! make install; then
-        echo "Error instalando el controlador."
-        read -r -p "Presiona Enter para continuar..."
+    mkdir -p /usr/local/src
+
+    if [ -d "$DIRECTORIO/.git" ]; then
+        echo "Actualizando repositorio existente..."
+
+        if ! git -C "$DIRECTORIO" pull --ff-only; then
+            echo "No se pudo actualizar el repositorio."
+            Pausa
+            return 1
+        fi
+    else
+        if [ -e "$DIRECTORIO" ]; then
+            echo "Existe una carpeta que no es un repositorio Git:"
+            echo "$DIRECTORIO"
+            echo "No se eliminará automáticamente."
+            Pausa
+            return 1
+        fi
+
+        if ! git clone \
+            --depth 1 \
+            https://github.com/oe-alliance-drivers/rtl8852bu.git \
+            "$DIRECTORIO"; then
+
+            echo "No se pudo descargar el repositorio."
+            Pausa
+            return 1
+        fi
+    fi
+
+    cd "$DIRECTORIO" || {
+        echo "No se pudo abrir la carpeta del controlador."
+        Pausa
+        return 1
+    }
+
+    # Verificar archivos necesarios
+    echo ""
+    echo "[3/5] Verificando archivos del controlador..."
+
+    if [ ! -f "install-driver.sh" ]; then
+        echo "No se encontró install-driver.sh."
+        echo "Revisa el contenido del repositorio."
+        Pausa
         return 1
     fi
 
-    # Actualizar dependencias de módulos y cargar controlador.
+    if [ ! -f "dkms.conf" ] || [ ! -f "Makefile" ]; then
+        echo "Faltan archivos necesarios para compilar el controlador."
+        Pausa
+        return 1
+    fi
+
+    # Instalar utilizando el instalador del repositorio
+    echo ""
+    echo "[4/5] Instalando controlador mediante DKMS..."
+    echo "Sigue las instrucciones que aparezcan en pantalla."
+
+    if ! bash ./install-driver.sh; then
+        echo ""
+        echo "ERROR: falló la instalación del controlador."
+        echo ""
+        echo "Estado de DKMS:"
+        dkms status || true
+        echo ""
+        echo "Últimos mensajes del kernel:"
+        dmesg | tail -30
+        Pausa
+        return 1
+    fi
+
+    # Cargar el módulo
+    echo ""
+    echo "[5/5] Cargando módulo 8852bu..."
+
     depmod -a
 
     if ! modprobe "$MODULO"; then
         echo "No se pudo cargar el módulo $MODULO."
-        echo "Comprueba Secure Boot y los mensajes del kernel."
+        echo "Comprueba Secure Boot y los errores del kernel."
+        dkms status || true
         dmesg | tail -30
-        read -r -p "Presiona Enter para continuar..."
+        Pausa
         return 1
     fi
 
     sleep 3
-    
+
+    # Activar la interfaz solicitada
     if ip link show "$INTERFAZ_USB" >/dev/null 2>&1; then
+
         if ! ip link set "$INTERFAZ_USB" up; then
-            echo "No se pudo activar la interfaz."
-            read -r -p "Presiona Enter para continuar..."
+            echo "El controlador está cargado, pero no se pudo activar la interfaz."
+            Pausa
             return 1
         fi
 
         echo ""
         echo "ANTENA USB ACTIVADA CORRECTAMENTE."
         ip -br link show "$INTERFAZ_USB"
+
     else
         echo ""
-        echo "El módulo se cargó, pero la interfaz no apareció."
-        echo "Comprueba si el controlador corresponde a tu antena."
+        echo "El módulo se cargó, pero no aparece la interfaz esperada:"
+        echo "$INTERFAZ_USB"
         echo ""
+        echo "Interfaces detectadas:"
         ip -br link
+        echo ""
+        echo "Comprueba que la antena esté conectada y que el controlador"
+        echo "sea compatible con su identificador USB."
     fi
 
     echo ""
     echo "Estado del módulo:"
     lsmod | grep "$MODULO" || true
 
-    read -r -p "Presiona Enter para continuar..."
+    echo ""
+    echo "Estado de DKMS:"
+    dkms status || true
+
+    Pausa
 }
 
 # =========================================================
