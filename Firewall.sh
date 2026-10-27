@@ -108,7 +108,7 @@ fi
     echo ""
     echo "[3/6] Descargando controlador desde GitHub..."
 
-    URL="https://raw.githubusercontent.com/Mesa-5/mes/refs/heads/main/rtl8852bu-20240418-main.zip"
+    URL="https://github.com/Mesa-5/PROYECTO_FINAL_MESA-5/raw/refs/heads/main/rtl8852bu-20240418-main.zip""
 
     if ! curl -fL "$URL" -o "$ZIP"; then
         echo "No se pudo descargar el ZIP."
