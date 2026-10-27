@@ -46,6 +46,7 @@ Pausa() {
 
 ActivarAntena() {
 
+ActivarAntena() {
     clear
 
     echo "=========================================="
@@ -235,6 +236,7 @@ ActivarAntena() {
     dkms status || true
 
     Pausa
+}
 }
 
 # =========================================================
