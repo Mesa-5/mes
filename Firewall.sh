@@ -365,8 +365,14 @@ fi
 if ! ssh -i "$LLAVE_SSH" \
 -o BatchMode=yes \
 "$SERVIDOR_ORIGEN" "command -v rsync >/dev/null"; then
-
 echo "Error: RSYNC no está instalado en el servidor origen."
+Pausa
+return 1
+fi
+
+echo "Generando respaldo de MariaDB en el servidor origen..."
+if ! ssh -i "$LLAVE_SSH" -o BatchMode=yes "$SERVIDOR_ORIGEN" 'set -e; command -v mariadb-dump >/dev/null; mkdir -p /var/backups/mariadb; chmod 700 /var/backups/mariadb; FECHA=$(date +%Y-%m-%d_%H%M%S); ARCHIVO="/var/backups/mariadb/datacenter_${FECHA}.sql"; mariadb-dump --single-transaction --routines --triggers datacenter > "$ARCHIVO"; test -s "$ARCHIVO"; mapfile -t LISTA < <(ls -1t /var/backups/mariadb/datacenter_*.sql 2>/dev/null || true); for ((i=24; i<${#LISTA[@]}; i++)); do rm -f -- "${LISTA[i]}"; done'; then
+echo "Error: no se pudo respaldar la base de datos datacenter."
 Pausa
 return 1
 fi
@@ -424,7 +430,6 @@ fi
 
 done
 
-# Finalizar respaldo
 if [ -e "$DESTINO" ]; then
 echo "Error: ya existe un respaldo con esa fecha."
 rm -rf "$TEMPORAL"
@@ -521,8 +526,13 @@ fi
 if ! ssh -i "$LLAVE_SSH" \
 -o BatchMode=yes \
 "$SERVIDOR_ORIGEN" "command -v rsync >/dev/null"; then
-
 echo "ERROR: RSYNC no está instalado."
+exit 1
+fi
+
+echo "Generando respaldo de MariaDB en el servidor origen..."
+if ! ssh -i "$LLAVE_SSH" -o BatchMode=yes "$SERVIDOR_ORIGEN" 'set -e; command -v mariadb-dump >/dev/null; mkdir -p /var/backups/mariadb; chmod 700 /var/backups/mariadb; FECHA=$(date +%Y-%m-%d_%H%M%S); ARCHIVO="/var/backups/mariadb/datacenter_${FECHA}.sql"; mariadb-dump --single-transaction --routines --triggers datacenter > "$ARCHIVO"; test -s "$ARCHIVO"; mapfile -t LISTA < <(ls -1t /var/backups/mariadb/datacenter_*.sql 2>/dev/null || true); for ((i=24; i<${#LISTA[@]}; i++)); do rm -f -- "${LISTA[i]}"; done'; then
+echo "ERROR: No se pudo respaldar la base de datos datacenter."
 exit 1
 fi
 
@@ -600,7 +610,6 @@ EOS
 
 chmod 700 "$SCRIPT_PATH"
 
-# Programar ejecución cada hora
 (crontab -l 2>/dev/null | grep -vF "$SCRIPT_PATH"
 echo "0 * * * * $SCRIPT_PATH >> /var/log/backup-horario.log 2>&1") | crontab -
 
