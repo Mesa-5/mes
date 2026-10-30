@@ -277,8 +277,8 @@ chmod 600 "${LLAVE_SSH}"
 chmod 644 "${LLAVE_SSH}.pub"
 echo "Se pedirá la contraseña de ${USUARIO_ORIGEN}@${IP_ORIGEN}..."
 ssh-copy-id -i "${LLAVE_SSH}.pub" "${USUARIO_ORIGEN}@${IP_ORIGEN}"
-echo "Configurando SSH en el servidor origen..."
-ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo bash -s" <<EOF
+echo "Configurando SSH en el servidor origen con sudo..."
+ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo -n bash -s" <<EOF
 sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#\\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
@@ -290,14 +290,14 @@ chmod 700 /root/.ssh
 touch /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 EOF
-cat "${LLAVE_SSH}.pub" | ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo tee -a /root/.ssh/authorized_keys > /dev/null"
-ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo systemctl restart ssh || sudo systemctl restart sshd"
+cat "${LLAVE_SSH}.pub" | ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo -n tee -a /root/.ssh/authorized_keys > /dev/null"
+ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo -n systemctl restart ssh || sudo -n systemctl restart sshd"
 sleep 2
 echo "Probando acceso root..."
 if ssh -i "${LLAVE_SSH}" -o BatchMode=yes -o StrictHostKeyChecking=no "root@${IP_ORIGEN}" "echo 'Conexion SSH root OK'"; then
 echo "Preparación lista. Usa root@${IP_ORIGEN} en el respaldo."
 else
-echo "Root aún no entra. Prueba manual: ssh -i ${LLAVE_SSH} root@${IP_ORIGEN}"
+echo "Root aún no entra. Prueba: ssh -i ${LLAVE_SSH} root@${IP_ORIGEN}"
 fi
 Pausa
 }
