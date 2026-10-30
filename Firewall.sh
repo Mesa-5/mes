@@ -252,7 +252,7 @@ echo "======================================"
 echo "     PREPARAR RESPALDOS"
 echo "======================================"
 read -p "IP del servidor a respaldar: " IP_ORIGEN
-read -p "Usuario SSH (ej: root): " USUARIO_ORIGEN
+read -p "Usuario SSH con sudo (ej: pasarela1): " USUARIO_ORIGEN
 CARPETA_BACKUPS="/srv/backups/servidor1"
 CARPETA_EXCL="/etc/rsync-backup"
 LLAVE_SSH="/root/.ssh/rsync_backup"
@@ -275,10 +275,30 @@ ssh-keygen -t ed25519 -f "${LLAVE_SSH}" -N "" -C "backup-automatico"
 fi
 chmod 600 "${LLAVE_SSH}"
 chmod 644 "${LLAVE_SSH}.pub"
-echo "Se pedirá la contraseña una sola vez..."
+echo "Se pedirá la contraseña de ${USUARIO_ORIGEN}@${IP_ORIGEN}..."
 ssh-copy-id -i "${LLAVE_SSH}.pub" "${USUARIO_ORIGEN}@${IP_ORIGEN}"
-ssh -i "${LLAVE_SSH}" -o BatchMode=yes -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "echo 'Conexion SSH OK'"
-echo "Preparación lista."
+echo "Configurando SSH en el servidor origen..."
+ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo bash -s" <<EOF
+sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+sed -i 's/^#\\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+grep -q '^PermitRootLogin' /etc/ssh/sshd_config || echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config
+grep -q '^PubkeyAuthentication' /etc/ssh/sshd_config || echo 'PubkeyAuthentication yes' >> /etc/ssh/sshd_config
+grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+touch /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+EOF
+cat "${LLAVE_SSH}.pub" | ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo tee -a /root/.ssh/authorized_keys > /dev/null"
+ssh -i "${LLAVE_SSH}" -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "sudo systemctl restart ssh || sudo systemctl restart sshd"
+sleep 2
+echo "Probando acceso root..."
+if ssh -i "${LLAVE_SSH}" -o BatchMode=yes -o StrictHostKeyChecking=no "root@${IP_ORIGEN}" "echo 'Conexion SSH root OK'"; then
+echo "Preparación lista. Usa root@${IP_ORIGEN} en el respaldo."
+else
+echo "Root aún no entra. Prueba manual: ssh -i ${LLAVE_SSH} root@${IP_ORIGEN}"
+fi
 Pausa
 }
 
