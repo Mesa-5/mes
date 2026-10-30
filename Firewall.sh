@@ -1,223 +1,92 @@
 #!/bin/bash
-# 01-pasarela-menu.sh
-
 set -o pipefail
 
 if [ "$EUID" -ne 0 ]; then
-echo "Ejecuta este script como root:"
-echo "sudo bash 01-pasarela-menu.sh"
+echo "Ejecuta como root: sudo bash menu-proyecto.sh"
 exit 1
 fi
-
-
-
-DetectarInterfaces() {
-mapfile -t WIFI_IFACES < <(
-ip -o link show |
-awk -F': ' '{print $2}' |
-sed 's/@.*//' |
-grep -E '^(wl|wlan)' || true
-)
-
-mapfile -t ETH_IFACES < <(
-ip -o link show |
-awk -F': ' '{print $2}' |
-sed 's/@.*//' |
-grep -E '^(en|eth)' || true
-)
-}
 
 Pausa() {
 echo ""
 read -r -p "Presiona Enter para continuar..."
 }
 
+DetectarInterfaces() {
+mapfile -t WIFI_IFACES < <(ip -o link show | awk -F': ' '{print $2}' | sed 's/@.*//' | grep -E '^(wl|wlan)' || true)
+mapfile -t ETH_IFACES < <(ip -o link show | awk -F': ' '{print $2}' | sed 's/@.*//' | grep -E '^(en|eth)' || true)
+}
+
+CrearBaseDatos() {
+clear
+echo "======================================"
+echo "     CREAR BASE DE DATOS MARIADB"
+echo "======================================"
+apt update
+apt install -y mariadb-server
+systemctl enable mariadb
+systemctl start mariadb
+mysql <<'EOF'
+CREATE DATABASE IF NOT EXISTS datacenter CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+USE datacenter;
+CREATE TABLE IF NOT EXISTS Usuarios (
+id INT AUTO_INCREMENT PRIMARY KEY,
+usuario VARCHAR(50) NOT NULL,
+password VARCHAR(50) NOT NULL,
+rol ENUM('Admin_pasarela','Admin_backup','Admin_monitoreo','Admin_telefonia') NOT NULL
+);
+CREATE TABLE IF NOT EXISTS Personal (
+id INT AUTO_INCREMENT PRIMARY KEY,
+nombre VARCHAR(100) NOT NULL,
+usuario VARCHAR(50) NOT NULL,
+area VARCHAR(50) NOT NULL,
+telefono VARCHAR(20),
+password VARCHAR(100)
+);
+INSERT INTO Usuarios (usuario, password, rol) VALUES
+('AdminNJC', '#Nelson47124712.', 'Admin_pasarela'),
+('AdminKVA', '#Kevin47124712.', 'Admin_backup'),
+('AdminKVA', '#Kevin47124712.', 'Admin_monitoreo'),
+('AdminBGS', '#Brayan47124712.', 'Admin_telefonia');
+INSERT INTO Personal (nombre, usuario, area, telefono, password) VALUES
+('Administrador Pasarela', 'AdminNJC', 'Pasarela / Red', '7218-0346', '#Nelson47124712.'),
+('Kevin Mejía', 'AdminKVA', 'Respaldos', '6190-1999', '#Kevin47124712.'),
+('Kevin Mejía', 'AdminKVA', 'Monitoreo', '6190-1999', '#Kevin47124712.'),
+('Bryan Steven', 'AdminBGS', 'Telefonía', '6080-6244', '#Brayan47124712.');
+EOF
+echo "Base de datos creada correctamente."
+Pausa
+}
 
 ActivarAntena() {
-
 clear
-
 echo "=========================================="
-echo " INSTALADOR RTL8852BU PARA UBUNTU SERVER"
+echo " INSTALADOR RTL8852BU"
 echo "=========================================="
-
 INTERFAZ_USB="wlxc83a35b1136d"
 MODULO="8852bu"
 DIRECTORIO="/usr/local/src/rtl8852bu"
-
-# Comprobar Ubuntu
-if [ ! -f /etc/os-release ]; then
-echo "No se pudo identificar Ubuntu."
-Pausa
-return 1
-fi
-
-. /etc/os-release
-
-if [ "$ID" != "ubuntu" ] ||
-{ [ "$VERSION_ID" != "22.04" ] &&
-[ "$VERSION_ID" != "24.04" ]; }; then
-echo "Este instalador admite Ubuntu 22.04 y 24.04."
-Pausa
-return 1
-fi
-
-echo "Ubuntu: $VERSION_ID"
-echo "Kernel: $(uname -r)"
-echo "Interfaz esperada: $INTERFAZ_USB"
-echo ""
-
-# Instalar herramientas y encabezados del kernel
-echo "[1/5] Instalando dependencias..."
-
-if ! apt update ||
-! apt install -y \
-build-essential \
-dkms \
-git \
-bc \
-iw \
-rfkill \
-libelf-dev \
-"linux-headers-$(uname -r)" \
-linux-headers-generic; then
-
-echo ""
-echo "ERROR: no se pudieron instalar las dependencias."
-echo "Comprueba la conexión y los encabezados del kernel."
-Pausa
-return 1
-fi
-
-if [ ! -e "/lib/modules/$(uname -r)/build" ]; then
-echo ""
-echo "No existen encabezados para el kernel actual."
-echo "Reinicia Ubuntu y vuelve a ejecutar esta opción."
-Pausa
-return 1
-fi
-
-echo ""
-echo "Descargando controlador actualizado..."
-
+apt update
+apt install -y build-essential dkms git bc iw rfkill libelf-dev "linux-headers-$(uname -r)" linux-headers-generic
 mkdir -p /usr/local/src
-
 if [ -d "$DIRECTORIO/.git" ]; then
-echo "Actualizando repositorio existente..."
-
-if ! git -C "$DIRECTORIO" pull --ff-only; then
-echo "No se pudo actualizar el repositorio."
-Pausa
-return 1
-fi
+git -C "$DIRECTORIO" pull --ff-only || true
 else
-if [ -e "$DIRECTORIO" ]; then
-echo "Existe una carpeta que no es un repositorio Git:"
-echo "$DIRECTORIO"
-echo "No se eliminará automáticamente."
-Pausa
-return 1
+rm -rf "$DIRECTORIO"
+git clone --depth 1 https://github.com/oe-alliance-drivers/rtl8852bu.git "$DIRECTORIO"
 fi
-
-if ! git clone \
---depth 1 \
-https://github.com/oe-alliance-drivers/rtl8852bu.git \
-"$DIRECTORIO"; then
-
-echo "No se pudo descargar el repositorio."
-Pausa
-return 1
-fi
-fi
-
-cd "$DIRECTORIO" || {
-echo "No se pudo abrir la carpeta del controlador."
-Pausa
-return 1
-}
-
-echo ""
-echo "Verificando archivos del controlador..."
-
-if [ ! -f "install-driver.sh" ]; then
-echo "No se encontró install-driver.sh."
-echo "Revisa el contenido del repositorio."
-Pausa
-return 1
-fi
-
-if [ ! -f "dkms.conf" ] || [ ! -f "Makefile" ]; then
-echo "Faltan archivos necesarios para compilar el controlador."
-Pausa
-return 1
-fi
-
-echo ""
-echo "Instalando controlador mediante DKMS..."
-echo "Sigue las instrucciones que aparezcan en pantalla."
-
-if ! bash ./install-driver.sh; then
-echo ""
-echo "ERROR: falló la instalación del controlador."
-echo ""
-echo "Estado de DKMS:"
-dkms status || true
-echo ""
-echo "Últimos mensajes del kernel:"
-dmesg | tail -30
-Pausa
-return 1
-fi
-
-# Cargar el módulo
-echo ""
-echo "Cargando módulo 8852bu..."
-
+cd "$DIRECTORIO" || return 1
+bash ./install-driver.sh || { echo "Falló la instalación del driver"; Pausa; return 1; }
 depmod -a
-
-if ! modprobe "$MODULO"; then
-echo "No se pudo cargar el módulo $MODULO."
-echo "Comprueba Secure Boot y los errores del kernel."
-dkms status || true
-dmesg | tail -30
-Pausa
-return 1
-fi
-
+modprobe "$MODULO" || true
 sleep 3
-
 if ip link show "$INTERFAZ_USB" >/dev/null 2>&1; then
-
-if ! ip link set "$INTERFAZ_USB" up; then
-echo "El controlador está cargado, pero no se pudo activar la interfaz."
-Pausa
-return 1
-fi
-
-echo ""
-echo "ANTENA USB ACTIVADA CORRECTAMENTE."
+ip link set "$INTERFAZ_USB" up || true
+echo "Antena USB activada."
 ip -br link show "$INTERFAZ_USB"
-
 else
-echo ""
-echo "El módulo se cargó, pero no aparece la interfaz esperada:"
-echo "$INTERFAZ_USB"
-echo ""
-echo "Interfaces detectadas:"
+echo "Módulo cargado, pero no aparece $INTERFAZ_USB"
 ip -br link
-echo ""
-echo "Comprueba que la antena esté conectada y que el controlador"
-echo "sea compatible con su identificador USB."
 fi
-
-echo ""
-echo "Estado del módulo:"
-lsmod | grep "$MODULO" || true
-
-echo ""
-echo "Estado de DKMS:"
-dkms status || true
-
 Pausa
 }
 
@@ -226,101 +95,36 @@ clear
 echo "======================================"
 echo "       CONFIGURAR PASARELA"
 echo "======================================"
-
 DetectarInterfaces
-
-echo ""
-echo "Interfaces WiFi: ${WIFI_IFACES[*]:-Ninguna}"
-echo "Interfaces Ethernet: ${ETH_IFACES[*]:-Ninguna}"
-echo ""
-
-if [ "${#WIFI_IFACES[@]}" -lt 1 ]; then
-echo "No se encontró ninguna interfaz WiFi."
-echo "Activa primero la antena USB."
+echo "WiFi: ${WIFI_IFACES[*]:-Ninguna}"
+echo "Ethernet: ${ETH_IFACES[*]:-Ninguna}"
+if [ "${#WIFI_IFACES[@]}" -lt 1 ] || [ "${#ETH_IFACES[@]}" -lt 1 ]; then
+echo "Faltan interfaces."
 Pausa
 return
 fi
-
-if [ "${#ETH_IFACES[@]}" -lt 1 ]; then
-echo "No se encontró ninguna interfaz Ethernet."
-Pausa
-return
-fi
-
-echo "Selecciona las interfaces:"
-echo ""
-
-select LAN in "${ETH_IFACES[@]}"; do
-if [ -n "$LAN" ]; then
-break
-fi
-echo "Selecciona una interfaz válida."
-done
-
-select WAN1 in "${WIFI_IFACES[@]}"; do
-if [ -n "$WAN1" ]; then
-break
-fi
-echo "Selecciona una interfaz válida."
-done
-
+select LAN in "${ETH_IFACES[@]}"; do [ -n "$LAN" ] && break; done
+select WAN1 in "${WIFI_IFACES[@]}"; do [ -n "$WAN1" ] && break; done
 WAN2=""
-
 if [ "${#WIFI_IFACES[@]}" -ge 2 ]; then
-echo ""
-echo "Selecciona el segundo proveedor WiFi."
-echo "Si no deseas utilizarlo, escribe 0."
-
 select OPCION_WAN2 in "${WIFI_IFACES[@]}" "Ninguno"; do
-if [ "$OPCION_WAN2" = "Ninguno" ]; then
-WAN2=""
-break
-elif [ -n "$OPCION_WAN2" ] && [ "$OPCION_WAN2" != "$WAN1" ]; then
-WAN2="$OPCION_WAN2"
-break
-else
-echo "Selecciona otra interfaz WiFi."
+if [ "$OPCION_WAN2" = "Ninguno" ]; then WAN2=""; break
+elif [ -n "$OPCION_WAN2" ] && [ "$OPCION_WAN2" != "$WAN1" ]; then WAN2="$OPCION_WAN2"; break
 fi
 done
 fi
-
 LAN_IP="192.168.50.1"
 RED="192.168.50.0/24"
-
-echo ""
-echo "Interfaz LAN: $LAN"
-echo "Proveedor WiFi 1: $WAN1"
-echo "Proveedor WiFi 2: ${WAN2:-No utilizado}"
-echo "IP de la pasarela: $LAN_IP"
-echo ""
-
-read -r -p "SSID del proveedor 1: " SSID1
-read -r -s -p "Contraseña del proveedor 1: " PASS1
-echo ""
-
-SSID2=""
-PASS2=""
-
+read -r -p "SSID proveedor 1: " SSID1
+read -r -s -p "Pass proveedor 1: " PASS1; echo
+SSID2=""; PASS2=""
 if [ -n "$WAN2" ]; then
-read -r -p "SSID del proveedor 2: " SSID2
-read -r -s -p "Contraseña del proveedor 2: " PASS2
-echo ""
+read -r -p "SSID proveedor 2: " SSID2
+read -r -s -p "Pass proveedor 2: " PASS2; echo
 fi
-
-echo ""
-echo "Se instalarán los paquetes necesarios."
-
-if ! apt update ||
-! apt install -y kea-dhcp4-server iptables-persistent; then
-echo "Error instalando los paquetes."
-Pausa
-return
-fi
-
-mkdir -p /etc/netplan
-mkdir -p /etc/kea
-
-    cat > /etc/netplan/99-pasarela.yaml <<EOF
+apt update
+apt install -y kea-dhcp4-server iptables-persistent
+cat > /etc/netplan/99-pasarela.yaml <<EOF
 network:
   version: 2
   renderer: networkd
@@ -337,9 +141,8 @@ network:
         "$SSID1":
           password: "$PASS1"
 EOF
-
-    if [ -n "$WAN2" ]; then
-        cat >> /etc/netplan/99-pasarela.yaml <<EOF
+if [ -n "$WAN2" ]; then
+cat >> /etc/netplan/99-pasarela.yaml <<EOF
     $WAN2:
       dhcp4: true
       dhcp4-overrides:
@@ -348,128 +151,49 @@ EOF
         "$SSID2":
           password: "$PASS2"
 EOF
-    fi
-
-chmod 600 /etc/netplan/99-pasarela.yaml
-
-echo ""
-echo "Validando configuración de Netplan..."
-
-if ! netplan generate; then
-echo "La configuración de Netplan contiene errores."
-Pausa
-return
 fi
-
-echo "Aplicando configuración..."
-netplan apply
-sleep 8
-
-    cat > /etc/sysctl.d/99-pasarela.conf <<EOF
-net.ipv4.ip_forward=1
-EOF
-
-    sysctl -p /etc/sysctl.d/99-pasarela.conf
-
-    # Configurar servidor DHCP Kea.
-    cat > /etc/kea/kea-dhcp4.conf <<EOF
+chmod 600 /etc/netplan/99-pasarela.yaml
+netplan generate && netplan apply
+sleep 5
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-pasarela.conf
+sysctl -p /etc/sysctl.d/99-pasarela.conf
+cat > /etc/kea/kea-dhcp4.conf <<EOF
 {
   "Dhcp4": {
-    "interfaces-config": {
-      "interfaces": ["$LAN"]
-    },
-    "lease-database": {
-      "type": "memfile",
-      "persist": true,
-      "name": "/var/lib/kea/kea-leases4.csv"
-    },
+    "interfaces-config": { "interfaces": ["$LAN"] },
+    "lease-database": { "type": "memfile", "persist": true, "name": "/var/lib/kea/kea-leases4.csv" },
     "valid-lifetime": 3600,
     "subnet4": [{
       "id": 1,
       "subnet": "$RED",
-      "pools": [{
-        "pool": "192.168.50.100 - 192.168.50.200"
-      }],
+      "pools": [{ "pool": "192.168.50.100 - 192.168.50.200" }],
       "option-data": [
-        {
-          "name": "routers",
-          "data": "$LAN_IP"
-        },
-        {
-          "name": "domain-name-servers",
-          "data": "8.8.8.8, 1.1.1.1"
-        }
+        { "name": "routers", "data": "$LAN_IP" },
+        { "name": "domain-name-servers", "data": "8.8.8.8, 1.1.1.1" }
       ]
     }]
   }
 }
 EOF
-
-echo ""
-echo "Comprobando configuración DHCP..."
-
-if ! kea-dhcp4 -t /etc/kea/kea-dhcp4.conf; then
-echo "La configuración de Kea contiene errores."
-Pausa
-return
-fi
-
+kea-dhcp4 -t /etc/kea/kea-dhcp4.conf
 systemctl enable kea-dhcp4-server
-
-if ! systemctl restart kea-dhcp4-server; then
-echo "Error iniciando Kea DHCP."
-systemctl status kea-dhcp4-server --no-pager
-Pausa
-return
-fi
-
-echo ""
+systemctl restart kea-dhcp4-server
 echo "Pasarela configurada."
-echo "Ahora aplica la opción 3 para configurar el firewall."
-echo ""
 ip -br address
-ip route show
-
 Pausa
 }
-
 
 Firewall() {
 clear
 echo "======================================"
 echo "         APLICAR FIREWALL"
 echo "======================================"
-
 DetectarInterfaces
-
-if [ "${#WIFI_IFACES[@]}" -eq 0 ] ||
-[ "${#ETH_IFACES[@]}" -eq 0 ]; then
-echo "Advertencia: falta una interfaz WiFi o Ethernet."
-echo "Se recomienda configurar primero la pasarela."
-Pausa
-return
-fi
-
-echo "WiFi: ${WIFI_IFACES[*]}"
-echo "Ethernet: ${ETH_IFACES[*]}"
-echo ""
-
-read -r -p "¿Aplicar las reglas del firewall? [S/N]: " RESPUESTA
-
-case "$RESPUESTA" in
-[sS]|[sS][iI])
-;;
-*)
-echo "Operación cancelada."
-Pausa
-return
-;;
-esac
-
+RED="192.168.50.0/24"
+DNS="8.8.8.8"
 iptables -P INPUT ACCEPT
 iptables -P OUTPUT ACCEPT
 iptables -P FORWARD ACCEPT
-
 iptables -F
 iptables -X
 iptables -t nat -F
@@ -478,166 +202,347 @@ iptables -t mangle -F
 iptables -t mangle -X
 iptables -t raw -F
 iptables -t raw -X
-
 iptables -P INPUT DROP
 iptables -P OUTPUT ACCEPT
 iptables -P FORWARD DROP
-
 iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m conntrack \
---ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A INPUT -p icmp -j ACCEPT
-
 iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+iptables -A INPUT -p tcp --sport 22 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
+iptables -A OUTPUT -p tcp --sport 22 -j ACCEPT
 iptables -A INPUT -p tcp --dport 80 -j ACCEPT
 iptables -A INPUT -p tcp --dport 443 -j ACCEPT
 iptables -A INPUT -p tcp --dport 5666 -j ACCEPT
-
 iptables -A INPUT -p udp --dport 5060 -j ACCEPT
 iptables -A INPUT -p tcp --dport 5060 -j ACCEPT
 iptables -A INPUT -p tcp --dport 5061 -j ACCEPT
 iptables -A INPUT -p udp --dport 10000:20000 -j ACCEPT
-
+iptables -A OUTPUT -p udp --dport 5060 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 5060 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 5061 -j ACCEPT
+iptables -A OUTPUT -p udp --dport 10000:20000 -j ACCEPT
 for E in "${ETH_IFACES[@]}"; do
-iptables -A INPUT -i "$E" \
--p udp --dport 67 -j ACCEPT
-iptables -A INPUT -i "$E" \
--p udp --dport 68 -j ACCEPT
+iptables -A INPUT -i "$E" -p udp --dport 67 -j ACCEPT
+iptables -A INPUT -i "$E" -p udp --dport 68 -j ACCEPT
 done
-
-RED="192.168.50.0/24"
-DNS="8.8.8.8"
-
-echo ""
-echo "Configurando NAT y reenvío..."
-
 for W in "${WIFI_IFACES[@]}"; do
 for E in "${ETH_IFACES[@]}"; do
-iptables -t nat -A POSTROUTING \
--s "$RED" -o "$W" -j MASQUERADE
-
-iptables -A FORWARD \
--i "$E" -o "$W" -s "$RED" -j ACCEPT
-
-iptables -A FORWARD \
--i "$W" -o "$E" \
--d "$RED" \
--m conntrack \
---ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -t nat -A POSTROUTING -s "$RED" -o "$W" -j MASQUERADE
+iptables -A FORWARD -i "$E" -o "$W" -s "$RED" -j ACCEPT
+iptables -A FORWARD -i "$W" -o "$E" -d "$RED" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 done
 done
-
 for E in "${ETH_IFACES[@]}"; do
-iptables -t nat -A PREROUTING \
--i "$E" -s "$RED" \
--p udp --dport 53 \
--j DNAT --to-destination "$DNS":53
-
-iptables -t nat -A PREROUTING \
--i "$E" -s "$RED" \
--p tcp --dport 53 \
--j DNAT --to-destination "$DNS":53
+iptables -t nat -A PREROUTING -i "$E" -s "$RED" -p udp --dport 53 -j DNAT --to-destination ${DNS}:53
+iptables -t nat -A PREROUTING -i "$E" -s "$RED" -p tcp --dport 53 -j DNAT --to-destination ${DNS}:53
 done
-
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-pasarela.conf
 sysctl -p /etc/sysctl.d/99-pasarela.conf
-
-if ! systemctl is-active --quiet netfilter-persistent; then
-systemctl enable netfilter-persistent
-fi
-
-if ! netfilter-persistent save; then
-echo "No se pudieron guardar las reglas persistentes."
-Pausa
-return
-fi
-
-echo ""
-echo "Firewall implementado correctamente."
-echo "Recuerda que el segundo proveedor no se suma al primero:"
-echo "las métricas de ruta determinan cuál tiene prioridad."
-
+apt install -y iptables-persistent >/dev/null 2>&1 || true
+netfilter-persistent save
+echo "Firewall aplicado."
 Pausa
 }
 
+PrepararBackup() {
+clear
+echo "======================================"
+echo "     PREPARAR RESPALDOS"
+echo "======================================"
+read -p "IP del servidor a respaldar: " IP_ORIGEN
+read -p "Usuario SSH (ej: root): " USUARIO_ORIGEN
+CARPETA_BACKUPS="/srv/backups/servidor1"
+CARPETA_EXCL="/etc/rsync-backup"
+LLAVE_SSH="/root/.ssh/rsync_backup"
+mkdir -p "${CARPETA_BACKUPS}" "${CARPETA_EXCL}" /root/.ssh
+chmod 700 /root/.ssh
+cat > "${CARPETA_EXCL}/excluir.txt" <<EOF
+*.tmp
+*.cache
+*.log
+/proc
+/sys
+/dev
+/run
+/tmp
+/var/tmp
+/lost+found
+EOF
+if [ ! -f "${LLAVE_SSH}" ]; then
+ssh-keygen -t ed25519 -f "${LLAVE_SSH}" -N "" -C "backup-automatico"
+fi
+chmod 600 "${LLAVE_SSH}"
+chmod 644 "${LLAVE_SSH}.pub"
+echo "Se pedirá la contraseña una sola vez..."
+ssh-copy-id -i "${LLAVE_SSH}.pub" "${USUARIO_ORIGEN}@${IP_ORIGEN}"
+ssh -i "${LLAVE_SSH}" -o BatchMode=yes -o StrictHostKeyChecking=no "${USUARIO_ORIGEN}@${IP_ORIGEN}" "echo 'Conexion SSH OK'"
+echo "Preparación lista."
+Pausa
+}
 
+EjecutarBackup() {
+clear
+echo "======================================"
+echo "     RESPALDO INCREMENTAL"
+echo "======================================"
+read -p "Servidor origen (ej: root@192.168.50.1): " SERVIDOR_ORIGEN
+RUTAS=(/etc /home /root /var/www /var/backups)
+CARPETA_BACKUPS="/srv/backups/servidor1"
+ARCHIVO_EXCLUSIONES="/etc/rsync-backup/excluir.txt"
+LLAVE_SSH="/root/.ssh/rsync_backup"
+CONSERVAR=24
+FECHA=$(date +%Y-%m-%d_%H%M%S)
+TEMPORAL="${CARPETA_BACKUPS}/en_progreso"
+ULTIMO="${CARPETA_BACKUPS}/ultimo"
+mkdir -p "${TEMPORAL}"
+ERROR=0
+for RUTA in "${RUTAS[@]}"; do
+echo "Copiando: ${RUTA}"
+ENLACE=()
+[ -d "${ULTIMO}${RUTA}" ] && ENLACE=(--link-dest="${ULTIMO}${RUTA}")
+mkdir -p "${TEMPORAL}${RUTA}"
+rsync -aHAX --numeric-ids --delete --exclude-from="${ARCHIVO_EXCLUSIONES}" \
+"${ENLACE[@]}" -e "ssh -i ${LLAVE_SSH} -o BatchMode=yes -o StrictHostKeyChecking=no" \
+"${SERVIDOR_ORIGEN}:${RUTA}/" "${TEMPORAL}${RUTA}/" || ERROR=$?
+if [ "${ERROR}" -ne 0 ] && [ "${ERROR}" -ne 24 ]; then
+echo "Error en ${RUTA}. Código: ${ERROR}"
+Pausa
+return 1
+fi
+done
+mv "${TEMPORAL}" "${CARPETA_BACKUPS}/${FECHA}"
+ln -sfn "${FECHA}" "${ULTIMO}"
+mapfile -t LISTA < <(find "${CARPETA_BACKUPS}" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9]-*' | sort)
+SOBRAN=$(( ${#LISTA[@]} - CONSERVAR ))
+if [ "${SOBRAN}" -gt 0 ]; then
+for (( i=0; i<SOBRAN; i++ )); do rm -rf "${LISTA[i]}"; done
+fi
+echo "Respaldo terminado: ${CARPETA_BACKUPS}/${FECHA}"
+Pausa
+}
+
+ProgramarBackupHora() {
+clear
+echo "======================================"
+echo "   PROGRAMAR RESPALDO CADA HORA"
+echo "======================================"
+SCRIPT_PATH="/root/backup-horario.sh"
+cat > "${SCRIPT_PATH}" <<'EOS'
+#!/bin/bash
+SERVIDOR_ORIGEN="root@192.168.50.1"
+RUTAS=(/etc /home /root /var/www /var/backups)
+CARPETA_BACKUPS="/srv/backups/servidor1"
+ARCHIVO_EXCLUSIONES="/etc/rsync-backup/excluir.txt"
+LLAVE_SSH="/root/.ssh/rsync_backup"
+CONSERVAR=24
+FECHA=$(date +%Y-%m-%d_%H%M%S)
+TEMPORAL="${CARPETA_BACKUPS}/en_progreso"
+ULTIMO="${CARPETA_BACKUPS}/ultimo"
+mkdir -p "${TEMPORAL}"
+ERROR=0
+for RUTA in "${RUTAS[@]}"; do
+ENLACE=()
+[ -d "${ULTIMO}${RUTA}" ] && ENLACE=(--link-dest="${ULTIMO}${RUTA}")
+mkdir -p "${TEMPORAL}${RUTA}"
+rsync -aHAX --numeric-ids --delete --exclude-from="${ARCHIVO_EXCLUSIONES}" \
+"${ENLACE[@]}" -e "ssh -i ${LLAVE_SSH} -o BatchMode=yes -o StrictHostKeyChecking=no" \
+"${SERVIDOR_ORIGEN}:${RUTA}/" "${TEMPORAL}${RUTA}/" || ERROR=$?
+[ "${ERROR}" -ne 0 ] && [ "${ERROR}" -ne 24 ] && exit "${ERROR}"
+done
+mv "${TEMPORAL}" "${CARPETA_BACKUPS}/${FECHA}"
+ln -sfn "${FECHA}" "${ULTIMO}"
+mapfile -t LISTA < <(find "${CARPETA_BACKUPS}" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9]-*' | sort)
+SOBRAN=$(( ${#LISTA[@]} - CONSERVAR ))
+if [ "${SOBRAN}" -gt 0 ]; then
+for (( i=0; i<SOBRAN; i++ )); do rm -rf "${LISTA[i]}"; done
+fi
+EOS
+chmod +x "${SCRIPT_PATH}"
+(crontab -l 2>/dev/null | grep -v backup-horario.sh; echo "0 * * * * ${SCRIPT_PATH} >> /var/log/backup-horario.log 2>&1") | crontab -
+echo "Programado cada hora. Log: /var/log/backup-horario.log"
+Pausa
+}
+
+InstalarNagios() {
+clear
+echo "======================================"
+echo "     INSTALAR NAGIOS"
+echo "======================================"
+echo "1) Servidor Nagios Core"
+echo "2) Nodo agente (NRPE)"
+read -p "Opción: " TIPO_ROLE
+case "$TIPO_ROLE" in
+1)
+apt update
+DEBIAN_FRONTEND=noninteractive apt install -y wget build-essential apache2 php libgd-dev libapache2-mod-php libssl-dev bc gawk dc snmp libnet-snmp-perl gettext monitoring-plugins-common nagios-nrpe-plugin
+id -u nagios >/dev/null 2>&1 || useradd nagios
+getent group nagcmd >/dev/null 2>&1 || groupadd nagcmd
+usermod -aG nagcmd nagios
+usermod -aG nagcmd www-data
+if [ ! -f /usr/local/nagios/bin/nagios ]; then
+cd /tmp
+wget -q https://assets.nagios.com/downloads/nagioscore/releases/nagios-4.4.14.tar.gz -O nagios-core.tar.gz
+tar zxf nagios-core.tar.gz
+cd nagios-4.4.14
+./configure --with-command-group=nagcmd
+make all
+make install
+make install-init
+make install-commandmode
+make install-config
+make install-webconf
+fi
+a2enmod rewrite cgi
+htpasswd -b -c /usr/local/nagios/etc/htpasswd.users nagiosadmin Admin2026*
+systemctl restart apache2
+systemctl enable nagios
+systemctl restart nagios
+echo "Nagios Core listo. Usuario web: nagiosadmin"
+;;
+2)
+read -p "IP del servidor Nagios: " NAGIOS_SERVER_IP
+apt update
+apt install -y nagios-nrpe-server nagios-plugins
+if ! grep -q "$NAGIOS_SERVER_IP" /etc/nagios/nrpe.cfg; then
+sed -i "s/^allowed_hosts=.*/&,$NAGIOS_SERVER_IP/" /etc/nagios/nrpe.cfg
+fi
+systemctl enable nagios-nrpe-server
+systemctl restart nagios-nrpe-server
+echo "Agente NRPE listo."
+;;
+*)
+echo "Opción inválida."
+;;
+esac
+Pausa
+}
+
+AgregarHostsNagios() {
+clear
+echo "======================================"
+echo "     AÑADIR HOSTS A NAGIOS"
+echo "======================================"
+NAGIOS_OBJECTS_DIR="/usr/local/nagios/etc/objects"
+CONTINUAR="s"
+HOSTS_CREADOS=0
+while [ "$CONTINUAR" = "s" ] || [ "$CONTINUAR" = "S" ]; do
+read -p "Nombre del equipo: " HOST_NAME
+read -p "IP del equipo: " HOST_IP
+[ -z "$HOST_NAME" ] || [ -z "$HOST_IP" ] && continue
+FILE_PATH="$NAGIOS_OBJECTS_DIR/${HOST_NAME}.cfg"
+echo "1) NRPE (Linux)"
+echo "2) Solo host básico"
+read -p "Opción: " AGENT_OPTION
+case "$AGENT_OPTION" in
+1)
+cat > "$FILE_PATH" <<EOF
+define host {
+    use         linux-server
+    host_name   $HOST_NAME
+    alias       Equipo Linux NRPE
+    address     $HOST_IP
+}
+define service {
+    use                 generic-service
+    host_name           $HOST_NAME
+    service_description Carga CPU
+    check_command       check_nrpe!check_load
+}
+define service {
+    use                 generic-service
+    host_name           $HOST_NAME
+    service_description Disco
+    check_command       check_nrpe!check_disk
+}
+EOF
+;;
+2)
+cat > "$FILE_PATH" <<EOF
+define host {
+    use         generic-host
+    host_name   $HOST_NAME
+    alias       Host básico
+    address     $HOST_IP
+}
+EOF
+;;
+*)
+echo "Opción no válida"
+continue
+;;
+esac
+HOSTS_CREADOS=$((HOSTS_CREADOS + 1))
+read -p "¿Añadir otro? (s/n): " CONTINUAR
+done
+if [ "$HOSTS_CREADOS" -gt 0 ]; then
+if /usr/local/nagios/bin/nagios -v /usr/local/nagios/etc/nagios.cfg >/dev/null 2>&1; then
+systemctl restart nagios
+echo "Hosts cargados: $HOSTS_CREADOS"
+else
+echo "Error de sintaxis en Nagios."
+fi
+fi
+Pausa
+}
 
 Estado() {
 clear
-
 echo "======================================"
-echo "        ESTADO DE LA PASARELA"
+echo "        ESTADO GENERAL"
 echo "======================================"
-
 echo ""
-echo "1. Interfaces de red"
-echo "--------------------------------------"
+echo "--- Interfaces ---"
 ip -br address
-
 echo ""
-echo "2. Rutas de red"
-echo "--------------------------------------"
+echo "--- Rutas ---"
 ip route show
-
 echo ""
-echo "3. Controlador RTL8852BU"
-echo "--------------------------------------"
-lsmod | grep 8852bu || echo "Módulo no cargado."
-
+echo "--- Kea DHCP ---"
+systemctl --no-pager --full status kea-dhcp4-server 2>/dev/null | head -n 8 || echo "No instalado"
 echo ""
-echo "4. Estado del DHCP Kea"
-echo "--------------------------------------"
-systemctl --no-pager --full status kea-dhcp4-server 2>/dev/null |
-head -n 12
-
+echo "--- Nagios ---"
+systemctl --no-pager --full status nagios 2>/dev/null | head -n 8 || echo "No instalado"
 echo ""
-echo "5. Reenvío IPv4"
-echo "--------------------------------------"
-sysctl net.ipv4.ip_forward
-
+echo "--- MariaDB ---"
+systemctl --no-pager --full status mariadb 2>/dev/null | head -n 8 || echo "No instalado"
 echo ""
-echo "6. Reglas INPUT y FORWARD"
-echo "--------------------------------------"
-iptables -L -n -v
-
-echo ""
-echo "7. Reglas NAT"
-echo "--------------------------------------"
-iptables -t nat -L -n -v
-
+echo "--- iptables INPUT ---"
+iptables -L INPUT -n -v | head -n 25
 Pausa
 }
 
-
 while true; do
 clear
-
 echo "======================================"
-echo "     PASARELA DOBLE PROVEEDOR WIFI"
-echo "           UBUNTU SERVER 24.04"
+echo "     MENÚ PROYECTO MESA-5"
 echo "======================================"
+echo "1) Crear base de datos"
+echo "2) Activar antena USB WiFi"
+echo "3) Configurar pasarela"
+echo "4) Aplicar firewall"
+echo "5) Preparar respaldos (SSH)"
+echo "6) Ejecutar respaldo ahora"
+echo "7) Programar respaldo cada hora"
+echo "8) Instalar Nagios (servidor/agente)"
+echo "9) Añadir hosts a Nagios"
+echo "10) Ver estado"
+echo "11) Salir"
 echo ""
-echo "1) Activar antena USB WiFi"
-echo "2) Configurar pasarela"
-echo "3) Aplicar firewall"
-echo "4) Ver estado"
-echo "5) Salir"
-echo ""
-
 read -r -p "Selecciona una opción: " OPCION
-
 case "$OPCION" in
-1) ActivarAntena ;;
-2) Pasarela ;;
-3) Firewall ;;
-4) Estado ;;
-5)
-echo "Saliendo del programa..."
-exit 0
-;;
-*)
-echo "Opción no válida."
-sleep 2
-;;
+1) CrearBaseDatos ;;
+2) ActivarAntena ;;
+3) Pasarela ;;
+4) Firewall ;;
+5) PrepararBackup ;;
+6) EjecutarBackup ;;
+7) ProgramarBackupHora ;;
+8) InstalarNagios ;;
+9) AgregarHostsNagios ;;
+10) Estado ;;
+11) echo "Saliendo..."; exit 0 ;;
+*) echo "Opción no válida"; sleep 1 ;;
 esac
 done
