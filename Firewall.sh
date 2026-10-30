@@ -305,41 +305,162 @@ Pausa
 EjecutarBackup() {
 clear
 echo "======================================"
-echo "     RESPALDO INCREMENTAL"
+echo "       RESPALDO INCREMENTAL"
 echo "======================================"
-read -p "Servidor origen (ej: root@192.168.50.1): " SERVIDOR_ORIGEN
-RUTAS=(/etc /home /root /var/www /var/backups)
-CARPETA_BACKUPS="/srv/backups/servidor1"
-ARCHIVO_EXCLUSIONES="/etc/rsync-backup/excluir.txt"
-LLAVE_SSH="/root/.ssh/rsync_backup"
-CONSERVAR=24
-FECHA=$(date +%Y-%m-%d_%H%M%S)
-TEMPORAL="${CARPETA_BACKUPS}/en_progreso"
-ULTIMO="${CARPETA_BACKUPS}/ultimo"
-mkdir -p "${TEMPORAL}"
-ERROR=0
-for RUTA in "${RUTAS[@]}"; do
-echo "Copiando: ${RUTA}"
-ENLACE=()
-[ -d "${ULTIMO}${RUTA}" ] && ENLACE=(--link-dest="${ULTIMO}${RUTA}")
-mkdir -p "${TEMPORAL}${RUTA}"
-rsync -aHAX --numeric-ids --delete --exclude-from="${ARCHIVO_EXCLUSIONES}" \
-"${ENLACE[@]}" -e "ssh -i ${LLAVE_SSH} -o BatchMode=yes -o StrictHostKeyChecking=no" \
-"${SERVIDOR_ORIGEN}:${RUTA}/" "${TEMPORAL}${RUTA}/" || ERROR=$?
-if [ "${ERROR}" -ne 0 ] && [ "${ERROR}" -ne 24 ]; then
-echo "Error en ${RUTA}. Código: ${ERROR}"
+
+read -r -p "Servidor origen (ej: root@192.168.50.1): " SERVIDOR_ORIGEN
+
+if [ -z "$SERVIDOR_ORIGEN" ]; then
+echo "Error: debes indicar el servidor origen."
 Pausa
 return 1
 fi
-done
-mv "${TEMPORAL}" "${CARPETA_BACKUPS}/${FECHA}"
-ln -sfn "${FECHA}" "${ULTIMO}"
-mapfile -t LISTA < <(find "${CARPETA_BACKUPS}" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9]-*' | sort)
-SOBRAN=$(( ${#LISTA[@]} - CONSERVAR ))
-if [ "${SOBRAN}" -gt 0 ]; then
-for (( i=0; i<SOBRAN; i++ )); do rm -rf "${LISTA[i]}"; done
+
+RUTAS=(/etc /home /root /var/backups)
+
+CARPETA_BACKUPS="/srv/backups/servidor1"
+ARCHIVO_EXCLUSIONES="/etc/rsync-backup/excluir.txt"
+LLAVE_SSH="/root/.ssh/rsync_backup"
+
+CONSERVAR=24
+FECHA=$(date +%Y-%m-%d_%H%M%S)
+
+TEMPORAL="${CARPETA_BACKUPS}/en_progreso"
+ULTIMO="${CARPETA_BACKUPS}/ultimo"
+DESTINO="${CARPETA_BACKUPS}/${FECHA}"
+
+mkdir -p "$CARPETA_BACKUPS"
+
+exec 9>/run/lock/backup-mesa5.lock
+
+if ! flock -n 9; then
+echo "Ya existe un respaldo en ejecución."
+Pausa
+return 1
 fi
-echo "Respaldo terminado: ${CARPETA_BACKUPS}/${FECHA}"
+
+if [ ! -f "$LLAVE_SSH" ]; then
+echo "Error: no existe la llave SSH."
+Pausa
+return 1
+fi
+
+if [ ! -f "$ARCHIVO_EXCLUSIONES" ]; then
+echo "Error: no existe el archivo de exclusiones."
+Pausa
+return 1
+fi
+
+echo "Comprobando conexión SSH..."
+
+if ! ssh -i "$LLAVE_SSH" \
+-o BatchMode=yes \
+-o StrictHostKeyChecking=accept-new \
+"$SERVIDOR_ORIGEN" "true"; then
+
+Pausa
+return 1
+fi
+
+# Comprobar RSYNC remoto
+if ! ssh -i "$LLAVE_SSH" \
+-o BatchMode=yes \
+"$SERVIDOR_ORIGEN" "command -v rsync >/dev/null"; then
+
+echo "Error: RSYNC no está instalado en el servidor origen."
+Pausa
+return 1
+fi
+
+rm -rf "$TEMPORAL"
+mkdir -p "$TEMPORAL"
+
+echo ""
+echo "Iniciando respaldo incremental..."
+echo ""
+
+for RUTA in "${RUTAS[@]}"; do
+
+echo "Verificando: $RUTA"
+
+if ! ssh -i "$LLAVE_SSH" \
+-o BatchMode=yes \
+"$SERVIDOR_ORIGEN" "test -d '$RUTA'"; then
+
+echo "Error: no existe el directorio $RUTA en el origen."
+rm -rf "$TEMPORAL"
+Pausa
+return 1
+fi
+
+echo "Copiando: $RUTA"
+
+ENLACE=()
+
+if [ -d "${ULTIMO}${RUTA}" ]; then
+ENLACE=(--link-dest="${ULTIMO}${RUTA}")
+fi
+
+mkdir -p "${TEMPORAL}${RUTA}"
+
+rsync -aHAX --numeric-ids --delete \
+--exclude-from="$ARCHIVO_EXCLUSIONES" \
+"${ENLACE[@]}" \
+-e "ssh -i ${LLAVE_SSH} -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
+"${SERVIDOR_ORIGEN}:${RUTA}/" \
+"${TEMPORAL}${RUTA}/"
+
+CODIGO=$?
+
+if [ "$CODIGO" -ne 0 ]; then
+echo ""
+echo "ERROR en $RUTA. Código: $CODIGO"
+echo "El respaldo no se guardará como completo."
+
+rm -rf "$TEMPORAL"
+
+Pausa
+return 1
+fi
+
+done
+
+# Finalizar respaldo
+if [ -e "$DESTINO" ]; then
+echo "Error: ya existe un respaldo con esa fecha."
+rm -rf "$TEMPORAL"
+Pausa
+return 1
+fi
+
+mv "$TEMPORAL" "$DESTINO"
+
+# Actualizar último respaldo
+ln -sfn "$FECHA" "$ULTIMO"
+
+# Conservar únicamente los últimos 24 respaldos
+mapfile -t LISTA < <(
+find "$CARPETA_BACKUPS" \
+-mindepth 1 -maxdepth 1 \
+-type d -name '20[0-9][0-9]-*' | sort
+)
+
+SOBRAN=$(( ${#LISTA[@]} - CONSERVAR ))
+
+if [ "$SOBRAN" -gt 0 ]; then
+for ((i=0; i<SOBRAN; i++)); do
+rm -rf -- "${LISTA[i]}"
+done
+fi
+
+echo ""
+echo "======================================"
+echo "   RESPALDO COMPLETADO CORRECTAMENTE"
+echo "======================================"
+echo "Ubicación: $DESTINO"
+echo "Respaldos conservados: $CONSERVAR"
+echo "Método: Incremental con hard links"
+
 Pausa
 }
 
