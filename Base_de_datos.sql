@@ -1,3 +1,6 @@
+sudo apt update
+sudo apt install -y mariadb-server
+  
 CREATE DATABASE IF NOT EXISTS DataCenter
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_general_ci;
