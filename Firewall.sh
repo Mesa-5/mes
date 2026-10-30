@@ -1,5 +1,5 @@
 #!/bin/bash
-set -o pipefail
+set -euo pipefail
 
 if [ "$EUID" -ne 0 ]; then
 echo "Ejecuta como root: sudo bash menu-proyecto.sh"
